@@ -1,0 +1,12 @@
+{
+  "name": "chatapp",
+  "version": "2.0.0",
+  "private": true,
+  "engines": { "node": ">=20.18.0" },
+  "scripts": {
+    "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix client install && npm --prefix client run build && npm --prefix server install",
+    "start": "npm --prefix server start"
+  },
+  "devDependencies": { "concurrently": "9.1.2" }
+}
