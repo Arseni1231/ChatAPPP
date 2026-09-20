@@ -5,12 +5,13 @@ import { listGroups } from '../services/groups.js';
 export function createBootstrapRouter({ firestore, redis, auth }) {
   const router = Router();
 
-  router.get('/', auth, async (_req, res) => {
+  router.get('/', auth, async (req, res) => {
     try {
       const [users, groups] = await Promise.all([
         listUsers({ firestore, redis }),
-        listGroups({ firestore, redis })
+        listGroups({ firestore, redis, userId: req.user.id })
       ]);
+
       res.json({ users, groups });
     } catch (error) {
       console.error('Bootstrap error:', error);

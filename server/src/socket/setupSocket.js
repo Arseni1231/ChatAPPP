@@ -1,7 +1,11 @@
 import jwt from 'jsonwebtoken';
 import { cleanText, conversationId } from '../utils/chat.js';
 import { getUser } from '../services/users.js';
-import { groupExists, listGroups } from '../services/groups.js';
+import {
+  assertGroupMember,
+  isGroupMember,
+  listGroups
+} from '../services/groups.js';
 import { saveDmMessage, saveGroupMessage } from '../services/messages.js';
 import { markOnline, markOffline, onlineUsers } from '../services/presence.js';
 import { canSendMessage } from '../services/rateLimit.js';
@@ -29,7 +33,7 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
     await markOnline(redis, userId);
     socket.join(`user:${userId}`);
 
-    const groups = await listGroups({ firestore, redis });
+    const groups = await listGroups({ firestore, redis, userId });
     for (const group of groups) {
       socket.join(`group:${group.id}`);
     }
@@ -37,7 +41,7 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
     io.emit('presence', await onlineUsers(redis));
 
     socket.on('group:join', async (groupId) => {
-      if (await groupExists(firestore, groupId)) {
+      if (await isGroupMember(firestore, groupId, userId)) {
         socket.join(`group:${groupId}`);
       }
     });
@@ -50,9 +54,10 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
 
         const groupId = String(payload?.groupId ?? '');
         const text = cleanText(payload?.text).slice(0, 4000);
-        if (!text || !(await groupExists(firestore, groupId))) {
-          return ack({ ok: false });
-        }
+
+        if (!text) return ack({ ok: false });
+
+        await assertGroupMember(firestore, groupId, userId);
 
         const message = {
           id: crypto.randomUUID(),
@@ -67,8 +72,12 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
         io.to(`group:${groupId}`).emit('message:new', message);
         ack({ ok: true });
       } catch (error) {
-        console.error('Socket group message error:', error);
-        ack({ ok: false });
+        ack({
+          ok: false,
+          error: error?.code === 'FORBIDDEN'
+            ? 'У тебя нет доступа к этой группе'
+            : 'Не удалось отправить сообщение'
+        });
       }
     });
 
