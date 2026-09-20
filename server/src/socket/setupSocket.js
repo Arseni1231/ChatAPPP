@@ -1,16 +1,22 @@
 import jwt from 'jsonwebtoken';
 import { cleanText, conversationId } from '../utils/chat.js';
 import { getUser } from '../services/users.js';
-import { groupExists } from '../services/groups.js';
+import { groupExists, listGroups } from '../services/groups.js';
+import { saveDmMessage, saveGroupMessage } from '../services/messages.js';
+import { markOnline, markOffline, onlineUsers } from '../services/presence.js';
+import { canSendMessage } from '../services/rateLimit.js';
 
-export function setupSocket(io, { redis, jwtSecret }) {
-  const online = new Map();
-
-  io.use((socket, next) => {
+export function setupSocket(io, { firestore, redis, jwtSecret }) {
+  io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token;
       if (!token) return next(new Error('unauthorized'));
+
       socket.user = jwt.verify(token, jwtSecret);
+      const user = await getUser(firestore, socket.user.id);
+      if (!user) return next(new Error('unauthorized'));
+
+      socket.profile = user;
       next();
     } catch {
       next(new Error('unauthorized'));
@@ -19,35 +25,45 @@ export function setupSocket(io, { redis, jwtSecret }) {
 
   io.on('connection', async (socket) => {
     const userId = socket.user.id;
-    online.set(userId, (online.get(userId) || 0) + 1);
+
+    await markOnline(redis, userId);
     socket.join(`user:${userId}`);
 
-    const groupIds = await redis.sMembers('groups');
-    for (const groupId of groupIds) socket.join(`group:${groupId}`);
+    const groups = await listGroups({ firestore, redis });
+    for (const group of groups) {
+      socket.join(`group:${group.id}`);
+    }
 
-    io.emit('presence', [...online.keys()]);
+    io.emit('presence', await onlineUsers(redis));
 
     socket.on('group:join', async (groupId) => {
-      if (await groupExists(redis, groupId)) socket.join(`group:${groupId}`);
+      if (await groupExists(firestore, groupId)) {
+        socket.join(`group:${groupId}`);
+      }
     });
 
     socket.on('message:group', async (payload, ack = () => {}) => {
       try {
+        if (!(await canSendMessage(redis, userId))) {
+          return ack({ ok: false, error: 'Слишком много сообщений' });
+        }
+
         const groupId = String(payload?.groupId ?? '');
         const text = cleanText(payload?.text).slice(0, 4000);
-        if (!text || !(await groupExists(redis, groupId))) return ack({ ok: false });
+        if (!text || !(await groupExists(firestore, groupId))) {
+          return ack({ ok: false });
+        }
 
         const message = {
           id: crypto.randomUUID(),
           type: 'group',
           groupId,
           text,
-          sender: { id: userId, username: socket.user.username },
+          sender: { id: userId, username: socket.profile.username },
           createdAt: new Date().toISOString()
         };
 
-        const key = `messages:group:${groupId}`;
-        await redis.multi().rPush(key, JSON.stringify(message)).lTrim(key, -1000, -1).exec();
+        await saveGroupMessage({ firestore, redis, groupId, message });
         io.to(`group:${groupId}`).emit('message:new', message);
         ack({ ok: true });
       } catch (error) {
@@ -58,9 +74,15 @@ export function setupSocket(io, { redis, jwtSecret }) {
 
     socket.on('message:dm', async (payload, ack = () => {}) => {
       try {
+        if (!(await canSendMessage(redis, userId))) {
+          return ack({ ok: false, error: 'Слишком много сообщений' });
+        }
+
         const to = String(payload?.to ?? '');
         const text = cleanText(payload?.text).slice(0, 4000);
-        if (!text || !to || !(await getUser(redis, to))) return ack({ ok: false });
+        if (!text || !to || !(await getUser(firestore, to))) {
+          return ack({ ok: false });
+        }
 
         const dmId = conversationId(userId, to);
         const message = {
@@ -69,12 +91,11 @@ export function setupSocket(io, { redis, jwtSecret }) {
           conversationId: dmId,
           to,
           text,
-          sender: { id: userId, username: socket.user.username },
+          sender: { id: userId, username: socket.profile.username },
           createdAt: new Date().toISOString()
         };
 
-        const key = `messages:dm:${dmId}`;
-        await redis.multi().rPush(key, JSON.stringify(message)).lTrim(key, -1000, -1).exec();
+        await saveDmMessage({ firestore, redis, conversationId: dmId, message });
         io.to(`user:${userId}`).to(`user:${to}`).emit('message:new', message);
         ack({ ok: true });
       } catch (error) {
@@ -83,11 +104,13 @@ export function setupSocket(io, { redis, jwtSecret }) {
       }
     });
 
-    socket.on('disconnect', () => {
-      const nextCount = (online.get(userId) || 1) - 1;
-      if (nextCount <= 0) online.delete(userId);
-      else online.set(userId, nextCount);
-      io.emit('presence', [...online.keys()]);
+    socket.on('disconnect', async () => {
+      try {
+        await markOffline(redis, userId);
+        io.emit('presence', await onlineUsers(redis));
+      } catch (error) {
+        console.error('Presence error:', error);
+      }
     });
   });
 }

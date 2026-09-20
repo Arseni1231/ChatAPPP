@@ -2,12 +2,15 @@ import { Router } from 'express';
 import { listUsers } from '../services/users.js';
 import { listGroups } from '../services/groups.js';
 
-export function createBootstrapRouter({ redis, auth }) {
+export function createBootstrapRouter({ firestore, redis, auth }) {
   const router = Router();
 
   router.get('/', auth, async (_req, res) => {
     try {
-      const [users, groups] = await Promise.all([listUsers(redis), listGroups(redis)]);
+      const [users, groups] = await Promise.all([
+        listUsers({ firestore, redis }),
+        listGroups({ firestore, redis })
+      ]);
       res.json({ users, groups });
     } catch (error) {
       console.error('Bootstrap error:', error);

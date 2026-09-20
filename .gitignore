@@ -4,5 +4,7 @@ server/node_modules
 client/dist
 server/.env
 .env
+serviceAccount*.json
+firebase-service-account*.json
 .DS_Store
 npm-debug.log*

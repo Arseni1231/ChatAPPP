@@ -1,13 +1,18 @@
 import { Router } from 'express';
-import { conversationId, safeJsonRows } from '../utils/chat.js';
+import { conversationId } from '../utils/chat.js';
+import { listDmMessages, listGroupMessages } from '../services/messages.js';
 
-export function createMessagesRouter({ redis, auth }) {
+export function createMessagesRouter({ firestore, redis, auth }) {
   const router = Router();
 
   router.get('/group/:groupId', auth, async (req, res) => {
     try {
-      const rows = await redis.lRange(`messages:group:${req.params.groupId}`, -100, -1);
-      res.json(safeJsonRows(rows));
+      const messages = await listGroupMessages({
+        firestore,
+        redis,
+        groupId: req.params.groupId
+      });
+      res.json(messages);
     } catch (error) {
       console.error('Group messages error:', error);
       res.status(500).json({ error: 'Не удалось загрузить сообщения' });
@@ -17,8 +22,8 @@ export function createMessagesRouter({ redis, auth }) {
   router.get('/dm/:userId', auth, async (req, res) => {
     try {
       const id = conversationId(req.user.id, req.params.userId);
-      const rows = await redis.lRange(`messages:dm:${id}`, -100, -1);
-      res.json(safeJsonRows(rows));
+      const messages = await listDmMessages({ firestore, redis, conversationId: id });
+      res.json(messages);
     } catch (error) {
       console.error('DM messages error:', error);
       res.status(500).json({ error: 'Не удалось загрузить сообщения' });

@@ -1,35 +1,54 @@
-export async function ensureGeneralGroup(redis) {
-  const exists = await redis.sIsMember('groups', 'general');
-  if (exists) return;
+import { getJson, setJson } from './cache.js';
 
-  const group = {
-    id: 'general',
-    name: 'Общий чат',
-    createdBy: 'system',
-    createdAt: new Date().toISOString()
-  };
+const CACHE_KEY = 'cache:groups';
 
-  await redis.multi().hSet('group:general', group).sAdd('groups', 'general').exec();
+function fromDoc(doc) {
+  return { id: doc.id, ...doc.data() };
 }
 
-export async function listGroups(redis) {
-  await ensureGeneralGroup(redis);
-  const ids = await redis.sMembers('groups');
-  const groups = await Promise.all(ids.map((id) => redis.hGetAll(`group:${id}`)));
+export async function ensureGeneralGroup(firestore) {
+  const ref = firestore.collection('groups').doc('general');
+  const doc = await ref.get();
+  if (!doc.exists) {
+    await ref.set({
+      name: 'Общий чат',
+      createdBy: 'system',
+      createdAt: new Date().toISOString()
+    });
+  }
+}
 
-  return groups.filter((group) => group?.id).sort((a, b) => {
+export async function listGroups({ firestore, redis }) {
+  const cached = await getJson(redis, CACHE_KEY);
+  if (cached) return cached;
+
+  await ensureGeneralGroup(firestore);
+  const snap = await firestore.collection('groups').orderBy('createdAt').get();
+  const groups = snap.docs.map(fromDoc).sort((a, b) => {
     if (a.id === 'general') return -1;
     if (b.id === 'general') return 1;
     return a.name.localeCompare(b.name);
   });
+
+  await setJson(redis, CACHE_KEY, groups, 300);
+  return groups;
 }
 
-export async function createGroup(redis, name, createdBy) {
-  const group = { id: crypto.randomUUID(), name, createdBy, createdAt: new Date().toISOString() };
-  await redis.multi().hSet(`group:${group.id}`, group).sAdd('groups', group.id).exec();
+export async function groupExists(firestore, id) {
+  const doc = await firestore.collection('groups').doc(id).get();
+  return doc.exists;
+}
+
+export async function createGroup({ firestore, redis, name, createdBy }) {
+  const ref = firestore.collection('groups').doc();
+  const group = {
+    id: ref.id,
+    name,
+    createdBy,
+    createdAt: new Date().toISOString()
+  };
+
+  await ref.set({ name: group.name, createdBy, createdAt: group.createdAt });
+  await redis.del(CACHE_KEY);
   return group;
-}
-
-export async function groupExists(redis, id) {
-  return redis.sIsMember('groups', id);
 }

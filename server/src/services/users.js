@@ -1,47 +1,58 @@
 import bcrypt from 'bcryptjs';
+import { getJson, setJson } from './cache.js';
+
+const CACHE_KEY = 'cache:users';
 
 export function publicUser(user) {
   return { id: user.id, username: user.username };
 }
 
-export async function getUser(redis, id) {
-  const user = await redis.hGetAll(`user:${id}`);
-  return user?.id ? user : null;
+export async function getUser(firestore, id) {
+  const doc = await firestore.collection('users').doc(id).get();
+  return doc.exists ? { id: doc.id, ...doc.data() } : null;
 }
 
-export async function getUserByUsername(redis, username) {
+export async function getUserByUsername(firestore, username) {
   const normalized = String(username).trim().toLowerCase();
-  const id = await redis.get(`username:${normalized}`);
-  if (!id) return null;
-  return getUser(redis, id);
+  const nameDoc = await firestore.collection('usernames').doc(normalized).get();
+  if (!nameDoc.exists) return null;
+  return getUser(firestore, nameDoc.data().uid);
 }
 
-export async function listUsers(redis) {
-  const ids = await redis.sMembers('users');
-  const users = await Promise.all(ids.map((id) => getUser(redis, id)));
-  return users.filter(Boolean).map(publicUser).sort((a, b) => a.username.localeCompare(b.username));
+export async function listUsers({ firestore, redis }) {
+  const cached = await getJson(redis, CACHE_KEY);
+  if (cached) return cached;
+
+  const snap = await firestore.collection('users').orderBy('usernameLower').get();
+  const users = snap.docs.map((doc) => publicUser({ id: doc.id, ...doc.data() }));
+  await setJson(redis, CACHE_KEY, users, 60);
+  return users;
 }
 
-export async function createUser(redis, username, password) {
+export async function createUser({ firestore, redis, username, password }) {
   const normalized = username.toLowerCase();
-  const id = crypto.randomUUID();
+  const userRef = firestore.collection('users').doc();
+  const usernameRef = firestore.collection('usernames').doc(normalized);
   const passwordHash = await bcrypt.hash(password, 12);
+  const now = new Date().toISOString();
 
-  const reserved = await redis.set(`username:${normalized}`, id, { NX: true });
-  if (!reserved) {
-    const error = new Error('USERNAME_TAKEN');
-    error.code = 'USERNAME_TAKEN';
-    throw error;
-  }
+  await firestore.runTransaction(async (tx) => {
+    const existing = await tx.get(usernameRef);
+    if (existing.exists) {
+      const error = new Error('USERNAME_TAKEN');
+      error.code = 'USERNAME_TAKEN';
+      throw error;
+    }
 
-  const user = { id, username, normalized, passwordHash, createdAt: new Date().toISOString() };
+    tx.set(usernameRef, { uid: userRef.id, createdAt: now });
+    tx.set(userRef, {
+      username,
+      usernameLower: normalized,
+      passwordHash,
+      createdAt: now
+    });
+  });
 
-  try {
-    await redis.multi().hSet(`user:${id}`, user).sAdd('users', id).exec();
-  } catch (error) {
-    await redis.del(`username:${normalized}`);
-    throw error;
-  }
-
-  return user;
+  await redis.del(CACHE_KEY);
+  return getUser(firestore, userRef.id);
 }
