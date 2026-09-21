@@ -1,4 +1,4 @@
-# ChatApp v3 — Redis + Firebase + Render
+# ChatApp — Redis + Firebase + Render
 
 React + Node.js + Socket.IO. Код разделён по компонентам, маршрутам и сервисам.
 
