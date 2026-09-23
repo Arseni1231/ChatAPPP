@@ -194,11 +194,46 @@ export async function removeGroupMember({ firestore, redis, groupId, ownerId, me
   };
 }
 
+async function deleteGroupMessages(
+  firestore,
+  groupId
+) {
+  const messagesRef = firestore
+    .collection('groupMessages')
+    .doc(groupId)
+    .collection('messages');
+
+  while (true) {
+    const snapshot = await messagesRef
+      .limit(400)
+      .get();
+
+    if (snapshot.empty) {
+      break;
+    }
+
+    const batch = firestore.batch();
+
+    for (const doc of snapshot.docs) {
+      batch.delete(doc.ref);
+    }
+
+    await batch.commit();
+  }
+
+  await firestore
+    .collection('groupMessages')
+    .doc(groupId)
+    .delete();
+}
+
 export async function deleteGroup({ firestore, redis, groupId, ownerId }) {
   const group = await assertGroupOwner(firestore, groupId, ownerId);
-
+  await deleteGroupMessages(firestore, groupId); // added (fifth problem)
   await firestore.collection('groups').doc(groupId).delete();
   await invalidateGroupCaches(redis, group.members || []);
+
+  await safeDel(redis, `cache:messages:group:${groupId}`); // added (fifth problem)
 
   return group;
 }
