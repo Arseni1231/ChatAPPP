@@ -49,10 +49,35 @@ export async function createUser({ firestore, redis, username, password }) {
       username,
       usernameLower: normalized,
       passwordHash,
+      tokenVersion: 0, // added
       createdAt: now
     });
   });
 
   await redis.del(CACHE_KEY);
   return getUser(firestore, userRef.id);
+}
+
+export function userTokenVersion(user) {
+  return Number(user?.tokenVersion || 0);
+}
+
+export async function revokeUserTokens(firestore, userId) {
+  const ref = firestore.collection('users').doc(userId);
+
+  await firestore.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+
+    if (!doc.exists) {
+      const error = new Error('USER_NOT_FOUND');
+      error.code = 'USER_NOT_FOUND';
+      throw error;
+    }
+
+    const currentVersion = Number(doc.data().tokenVersion || 0);
+
+    tx.update(ref, {
+      tokenVersion: currentVersion + 1
+    });
+  });
 }

@@ -11,8 +11,12 @@ import { createMessagesRouter } from './routes/messages.routes.js';
 
 export function createApp({ firestore, redis, io, config }) {
   const app = express();
-  const auth = createAuthMiddleware(config.jwtSecret);
-
+  //const auth = createAuthMiddleware(config.jwtSecret);
+  const auth = createAuthMiddleware({
+    jwtSecret: config.jwtSecret,
+    firestore
+  });
+  
   app.use(cors({
     origin: config.isProduction ? true : config.clientOrigin,
     credentials: true

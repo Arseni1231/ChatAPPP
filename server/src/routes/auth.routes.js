@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { createUser, getUserByUsername, publicUser } from '../services/users.js';
+//import { createUser, getUserByUsername, publicUser } from '../services/users.js';
+import { createUser, getUserByUsername, publicUser, revokeUserTokens, userTokenVersion } from '../services/users.js';
 
 function signToken(user, secret) {
-  return jwt.sign({ id: user.id, username: user.username }, secret, { expiresIn: '7d' });
+  return jwt.sign(
+    { 
+      id: user.id, 
+      username: user.username,
+      tokenVersion: userTokenVersion(user) //added
+    }, secret, { expiresIn: '1h' }); // was 7d, now is 1h
 }
 
-export function createAuthRouter({ firestore, redis, io, jwtSecret }) {
+export function createAuthRouter({ firestore, redis, io, jwtSecret, auth }) {
   const router = Router();
 
   router.post('/register', async (req, res) => {
@@ -24,8 +30,10 @@ export function createAuthRouter({ firestore, redis, io, jwtSecret }) {
 
       const user = await createUser({ firestore, redis, username, password });
       const safe = publicUser(user);
+
+      
       io.emit('user:new', safe);
-      res.status(201).json({ token: signToken(safe, jwtSecret), user: safe });
+      res.status(201).json({ token: signToken(user, jwtSecret), user: safe });
     } catch (error) {
       if (error?.code === 'USERNAME_TAKEN') {
         return res.status(409).json({ error: 'Такой логин уже занят' });
@@ -39,19 +47,43 @@ export function createAuthRouter({ firestore, redis, io, jwtSecret }) {
     try {
       const username = String(req.body?.username ?? '').trim();
       const password = String(req.body?.password ?? '');
-      const user = await getUserByUsername(firestore, username);
 
+      const user = await getUserByUsername(firestore, username);
+      
       if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
         return res.status(401).json({ error: 'Неверный логин или пароль' });
       }
 
       const safe = publicUser(user);
-      res.json({ token: signToken(safe, jwtSecret), user: safe });
+      res.json({ token: signToken(user, jwtSecret), user: safe });
+
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).json({ error: 'Не удалось выполнить вход' });
     }
   });
+
+  router.post('/logout', auth, async (req, res) => {
+  try {
+    await revokeUserTokens(
+      firestore,
+      req.user.id
+    );
+
+    io.in(`user:${req.user.id}`)
+      .disconnectSockets(true);
+
+    res.json({
+      ok: true
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+
+    res.status(500).json({
+      error: 'Не удалось завершить сессию'
+    });
+  }
+});
 
   return router;
 }
