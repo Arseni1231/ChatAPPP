@@ -67,8 +67,34 @@ export default function ChatPage({ token, me, onLogout }) {
   }, [token, onLogout]);
 
   useEffect(() => {
+    console.log('SOCKET EFFECT START', me.id);
     const socket = createChatSocket(token);
     socketRef.current = socket;
+
+    socket.on('connect', () => {
+  console.log('CLIENT SOCKET CONNECTED:', socket.id);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log(
+    'CLIENT SOCKET DISCONNECTED:',
+    socket.id,
+    reason
+  );
+});
+
+socket.io.on('reconnect_attempt', (attempt) => {
+  console.log(
+    'CLIENT RECONNECT ATTEMPT:',
+    attempt
+  );
+});
+
+    const presenceHeartbeatTimer = setInterval(() => {
+      if (socket.connected) {
+        socket.emit('presence:heartbeat');
+      }
+    }, 25000);
 
     function handlePresence(ids) {
       setOnlineUsers(ids);
@@ -150,6 +176,8 @@ export default function ChatPage({ token, me, onLogout }) {
     socket.on('connect_error', handleConnectError);
 
     return () => {
+      clearInterval(presenceHeartbeatTimer);
+
       socket.off('presence', handlePresence);
       socket.off('group:new', handleNewGroup);
       socket.off('group:updated', handleUpdatedGroup);
@@ -158,7 +186,10 @@ export default function ChatPage({ token, me, onLogout }) {
       socket.off('message:new', handleNewMessage);
       socket.off('connect_error', handleConnectError);
       socket.disconnect();
-      socketRef.current = null;
+
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
     };
   }, [token, me.id, onLogout]);
 

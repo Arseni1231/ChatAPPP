@@ -7,7 +7,7 @@ import {
   listGroups
 } from '../services/groups.js';
 import { saveDmMessage, saveGroupMessage } from '../services/messages.js';
-import { markOnline, markOffline, onlineUsers } from '../services/presence.js';
+import { heartbeatPresence, markOnline, markOffline, onlineUsers, presenceConfig } from '../services/presence.js';
 import { canSendMessage } from '../services/rateLimit.js';
 
 export function setupSocket(io, { firestore, redis, jwtSecret }) {
@@ -27,10 +27,28 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
     }
   });
 
+  const presenceBroadcastTimer = setInterval(async () => {
+  if (!redis?.isReady) {
+    return;
+  }
+
+  const online = await onlineUsers(redis);
+
+  io.emit(
+    'presence',
+    online
+  );
+  }, presenceConfig.heartbeatSeconds * 1000);
+
+  presenceBroadcastTimer.unref?.();
+
   io.on('connection', async (socket) => {
     const userId = socket.user.id;
+    console.log(
+        `SOCKET CONNECTED: ${userId}, socket=${socket.id}`
+    );
 
-    await markOnline(redis, userId);
+
     socket.join(`user:${userId}`);
 
     const groups = await listGroups({ firestore, redis, userId });
@@ -38,7 +56,15 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
       socket.join(`group:${group.id}`);
     }
 
+    await markOnline(redis, userId);
     io.emit('presence', await onlineUsers(redis));
+
+    socket.on('presence:heartbeat', async () => {
+    await heartbeatPresence(redis, userId);
+    });
+
+    
+    
 
     socket.on('group:join', async (groupId) => {
       if (await isGroupMember(firestore, groupId, userId)) {
@@ -113,13 +139,35 @@ export function setupSocket(io, { firestore, redis, jwtSecret }) {
       }
     });
 
-    socket.on('disconnect', async () => {
+    socket.on('disconnect', async (reason) => {
+      
+
       try {
-        await markOffline(redis, userId);
+        const room = io.sockets.adapter.rooms.get(`user:${userId}`);
+        const remainingConnections = room?.size || 0;
+
+        console.log(
+      `SOCKET DISCONNECTED: ${userId}, reason=${reason}, remaining=${remainingConnections}`
+    );
+
+        if (remainingConnections === 0) {
+          await markOffline(redis, userId);
+        }
+
         io.emit('presence', await onlineUsers(redis));
       } catch (error) {
         console.error('Presence error:', error);
       }
     });
   });
+
+      
+      //try {
+        //await markOffline(redis, userId);
+        //io.emit('presence', await onlineUsers(redis));
+      //} catch (error) {
+        //console.error('Presence error:', error);
+      //}
+    //});
+  //});
 }
