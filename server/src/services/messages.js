@@ -1,3 +1,5 @@
+import { redisAvailable } from './cache.js';
+
 const LIMIT = 100;
 const TTL = 3600;
 
@@ -10,27 +12,69 @@ function fromDoc(doc) {
 }
 
 async function readCache(redis, key) {
-  const rows = await redis.lRange(key, 0, -1);
-  if (!rows.length) return null;
-  return rows.flatMap((row) => {
-    try { return [JSON.parse(row)]; }
-    catch { return []; }
-  });
+  //const rows = await redis.lRange(key, 0, -1);
+  //if (!rows.length) return null;
+  //return rows.flatMap((row) => {
+    //try { return [JSON.parse(row)]; }
+    //catch { return []; }
+  //});
+
+  if (!redisAvailable(redis)) return null;
+
+  try {
+    const rows = await redis.lRange(key, 0, -1);
+    if (!rows.length) return null;
+    return rows.flatMap((row) => {
+      try { return [JSON.parse(row)]; }
+      catch { return []; }
+    });
+  } catch(error) {
+    console.warn('Redis cache read failed:', error.message);
+    return null;
+  }
 }
 
 async function writeCache(redis, key, messages) {
-  const tx = redis.multi().del(key);
-  for (const message of messages) tx.rPush(key, JSON.stringify(message));
-  tx.expire(key, TTL);
-  await tx.exec();
+  //const tx = redis.multi().del(key);
+  //for (const message of messages) tx.rPush(key, JSON.stringify(message));
+  //tx.expire(key, TTL);
+  //await tx.exec();
+
+  if (!redisAvailable(redis)) return false;
+
+  try {
+    const tx = redis.multi().del(key);
+    for (const message of messages) tx.rPush(key, JSON.stringify(message));
+    tx.expire(key, TTL);
+    await tx.exec();
+    return true;
+  } catch(error) {
+    console.warn('Redis cache write failed:', error.message);
+    return false;
+  }
 }
 
+
 async function appendCache(redis, key, message) {
-  await redis.multi()
-    .rPush(key, JSON.stringify(message))
-    .lTrim(key, -LIMIT, -1)
-    .expire(key, TTL)
-    .exec();
+  //await redis.multi()
+    //.rPush(key, JSON.stringify(message))
+    //.lTrim(key, -LIMIT, -1)
+    //.expire(key, TTL)
+    //.exec();
+
+    if (!redisAvailable(redis)) return false;
+
+  try {
+    await redis.multi()
+      .rPush(key, JSON.stringify(message))
+      .lTrim(key, -LIMIT, -1)
+      .expire(key, TTL)
+      .exec();
+    return true;
+  } catch(error) {
+    console.warn('Redis cache append failed:', error.message);
+    return false;
+  }
 }
 
 export async function listGroupMessages({ firestore, redis, groupId }) {
@@ -41,7 +85,7 @@ export async function listGroupMessages({ firestore, redis, groupId }) {
   const snap = await firestore.collection('groupMessages').doc(groupId)
     .collection('messages').orderBy('createdAt', 'desc').limit(LIMIT).get();
   const messages = snap.docs.map(fromDoc).reverse();
-  if (messages.length) await writeCache(redis, key, messages);
+  if (messages.length) {await writeCache(redis, key, messages);}
   return messages;
 }
 
@@ -53,7 +97,7 @@ export async function listDmMessages({ firestore, redis, conversationId }) {
   const snap = await firestore.collection('directMessages').doc(conversationId)
     .collection('messages').orderBy('createdAt', 'desc').limit(LIMIT).get();
   const messages = snap.docs.map(fromDoc).reverse();
-  if (messages.length) await writeCache(redis, key, messages);
+  if (messages.length) {await writeCache(redis, key, messages);}
   return messages;
 }
 

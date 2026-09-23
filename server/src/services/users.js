@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { getJson, setJson } from './cache.js';
+import { getJson, setJson, safeDel } from './cache.js';
 
 const CACHE_KEY = 'cache:users';
 
@@ -54,7 +54,7 @@ export async function createUser({ firestore, redis, username, password }) {
     });
   });
 
-  await redis.del(CACHE_KEY);
+  await safeDel(redis, CACHE_KEY);
   return getUser(firestore, userRef.id);
 }
 

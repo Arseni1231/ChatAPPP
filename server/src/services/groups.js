@@ -1,4 +1,4 @@
-import { getJson, setJson } from './cache.js';
+import { getJson, setJson, safeDel } from './cache.js';
 
 function fromDoc(doc) {
   return { id: doc.id, ...doc.data() };
@@ -14,11 +14,15 @@ function uniqueIds(ids = []) {
 
 async function invalidateGroupCaches(redis, userIds = []) {
   const ids = uniqueIds(userIds);
-  if (!ids.length) return;
+  if (!ids.length) {
+    
+    return;
 
-  const tx = redis.multi();
-  for (const id of ids) tx.del(cacheKey(id));
-  await tx.exec();
+  }
+  const keys = ids.map((id) => cacheKey(id));
+
+  await safeDel(redis, ...keys);
+  
 }
 
 function forbidden(message = 'Нет доступа к группе') {

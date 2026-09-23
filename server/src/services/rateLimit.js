@@ -13,10 +13,18 @@ const LOGIN_LIMIT = 5;
 const LOGIN_IP_LIMIT = 25;
 const LOGIN_WINDOW_SECONDS = 10 * 60;
 
+function redisAvailable(redis) {
+  return Boolean(redis?.isReady); // added(third problem)
+}
+
 export async function canSendMessage(
   redis,
   userId
 ) {
+  if (!redisAvailable(redis)) {
+    return true;
+  }
+
   const key = `ratelimit:messages:${userId}`;
 
   try {
@@ -65,6 +73,9 @@ async function incrementCounter(redis, key) {
 }
 
 export async function isLoginAllowed(redis, username, ip) {
+  if (!redisAvailable(redis)) {
+    return true; // aded(third problem)
+  }
   try {
   const userKey = loginUserKey(username, ip);
   const ipKey = loginIpKey(ip);
@@ -89,6 +100,14 @@ export async function isLoginAllowed(redis, username, ip) {
 }}
 
 export async function recordLoginFailure(redis, username, ip) {
+  if (!redisAvailable(redis)) {
+    return {
+      userAttempts: 0,
+      ipAttempts: 0,
+      remaining: LOGIN_LIMIT, //added(third problem)
+      blocked: false
+    };
+  }
   try{
   const userKey = loginUserKey(username, ip);
   const ipKey = loginIpKey(ip);
@@ -125,6 +144,11 @@ export async function clearLoginFailures(
   username,
   ip
 ) {
+
+  if (!redisAvailable(redis)) {
+    return; //added(third problem)
+  }
+
   try {
     const userKey = loginUserKey(
       username,

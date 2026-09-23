@@ -9,7 +9,23 @@ import { createApp } from './app.js';
 import { setupSocket } from './socket/setupSocket.js';
 
 const redis = createRedisClient(config.redisUrl);
-await connectRedis(redis);
+const redisConnected = await connectRedis(redis);
+
+if (!redisConnected) {
+  console.warn('ChatApp запускается без Redis. Основные данные будут загружаться из Firestore');
+}
+
+const redisReconnectTimer = setInterval(async () => {
+  if (redis.isReady) {
+    return;
+  }
+
+  console.log('Trying to reconnect to Redis...');
+
+  await connectRedis(redis);
+}, 15000);
+
+redisReconnectTimer.unref?.();
 
 const firestore = createFirestore(config.firebase);
 await ensureGeneralGroup(firestore);
@@ -24,6 +40,8 @@ const io = new Server(server, {
 
 const app = createApp({ firestore, redis, io, config });
 server.on('request', app);
+
+
 
 setupSocket(io, {
   firestore,
