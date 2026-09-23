@@ -16,7 +16,9 @@ export function createApp({ firestore, redis, io, config }) {
     jwtSecret: config.jwtSecret,
     firestore
   });
-  
+
+  app.set('trust proxy', 1); //added(second problem)
+
   app.use(cors({
     origin: config.isProduction ? true : config.clientOrigin,
     credentials: true
@@ -41,7 +43,8 @@ export function createApp({ firestore, redis, io, config }) {
     firestore,
     redis,
     io,
-    jwtSecret: config.jwtSecret
+    jwtSecret: config.jwtSecret,
+    auth
   }));
   app.use('/api/bootstrap', createBootstrapRouter({ firestore, redis, auth }));
   app.use('/api/groups', createGroupsRouter({ firestore, redis, io, auth }));

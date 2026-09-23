@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 //import { createUser, getUserByUsername, publicUser } from '../services/users.js';
 import { createUser, getUserByUsername, publicUser, revokeUserTokens, userTokenVersion } from '../services/users.js';
+import {clearLoginFailures, isLoginAllowed, recordLoginFailure, loginLimitConfig} from '../services/rateLimit.js'; //added(second problem)
 
 function signToken(user, secret) {
   return jwt.sign(
@@ -48,11 +49,41 @@ export function createAuthRouter({ firestore, redis, io, jwtSecret, auth }) {
       const username = String(req.body?.username ?? '').trim();
       const password = String(req.body?.password ?? '');
 
-      const user = await getUserByUsername(firestore, username);
-      
-      if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-        return res.status(401).json({ error: 'Неверный логин или пароль' });
+      //const user = await getUserByUsername(firestore, username);
+
+      //if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+        //return res.status(401).json({ error: 'Неверный логин или пароль' });
+      //}
+
+      //const safe = publicUser(user);
+      //res.json({ token: signToken(user, jwtSecret), user: safe });
+
+    //} catch (error) {
+      //console.error('Login error:', error);
+      //res.status(500).json({ error: 'Не удалось выполнить вход' });
+    //}
+
+      const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
+      const allowed = await isLoginAllowed(redis, username, ip);
+
+      if (!allowed) {
+        return res.status(429).json({ error: 'Слишком много попыток входа. Попробуйте снова через 10 минут.' });
       }
+
+      const user = await getUserByUsername(firestore, username);
+      const passwordCorrect = user && await bcrypt.compare(password, user.passwordHash);
+
+      if (!user || !passwordCorrect) {
+        const result = await recordLoginFailure(redis, username, ip);
+        if(result.blocked) {
+          return res.status(429).json({ error: 'Слишком много попыток входа. Вход временно заблокирован.' });
+        }
+
+        return res.status(401).json({ error: `Неверный логин или пароль. Осталось попыток: ${result.remaining}` });
+
+      }
+
+      await clearLoginFailures(redis, username, ip);
 
       const safe = publicUser(user);
       res.json({ token: signToken(user, jwtSecret), user: safe });
@@ -61,6 +92,7 @@ export function createAuthRouter({ firestore, redis, io, jwtSecret, auth }) {
       console.error('Login error:', error);
       res.status(500).json({ error: 'Не удалось выполнить вход' });
     }
+
   });
 
   router.post('/logout', auth, async (req, res) => {
